@@ -36,10 +36,11 @@ COLLECTION_PHASE_START = 150  # seconds after match start
 faced_wall = False
 standing_on_god = False
 
-def get_bomb_danger_tiles(game_state):
+def get_bomb_danger_tiles(game_state, additional_bomb_pos=None):
     """Get all tiles that are in danger from bombs."""
     danger_tiles = {}
     
+    # Add danger from existing bombs
     for bomb in game_state.map_info.bombs:
         # Add bomb's own position
         danger_tiles[bomb.position] = bomb.remain_time
@@ -63,6 +64,29 @@ def get_bomb_danger_tiles(game_state):
                 # Add to danger tiles with bomb's remain time
                 if pos not in danger_tiles or bomb.remain_time < danger_tiles[pos]:
                     danger_tiles[pos] = bomb.remain_time
+    
+    # Add danger from hypothetical bomb if position provided
+    if additional_bomb_pos:
+        danger_tiles[additional_bomb_pos] = 2000  # Default bomb timer
+        bomb_power = 2  # Default bomb power
+        
+        # Add tiles in hypothetical bomb's range
+        for direction in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+            for distance in range(1, bomb_power + 1):
+                row = additional_bomb_pos[0] + direction[0] * distance
+                col = additional_bomb_pos[1] + direction[1] * distance
+                pos = (row, col)
+                
+                if not (0 <= row < game_state.map_info.map_matrix.rows and 
+                       0 <= col < game_state.map_info.map_matrix.cols):
+                    break
+                    
+                cell = game_state.map_info.map_matrix[row, col]
+                if cell in [Tile.WALL.value, Tile.BALK.value, Tile.BRICK_WALL.value]:
+                    break
+                    
+                if pos not in danger_tiles or 2000 < danger_tiles[pos]:
+                    danger_tiles[pos] = 2000
     
     return danger_tiles
 
@@ -500,7 +524,7 @@ def is_in_loop(current_pos):
                 
     return False
 
-def find_bombing_opportunity(game_state, my_player, phase):
+def find_bombing_opportunity(game_state, my_player, phase, is_focus_on_enemy = False):
     """Find a good opportunity to bomb an enemy."""
     current_time = time()
     
@@ -520,8 +544,8 @@ def find_bombing_opportunity(game_state, my_player, phase):
         manhattan_dist = (abs(player.current_position[0] - my_player.current_position[0]) + 
                         abs(player.current_position[1] - my_player.current_position[1]))
                         
-        # Only consider nearby enemies
-        if manhattan_dist > 4:  # Reduced from 5 to 4 for more decisive action
+        # Only consider nearby enemies if not focusing on enemy
+        if manhattan_dist > 4 and is_focus_on_enemy == False:  # Reduced from 5 to 4 for more decisive action
             continue
             
         # Calculate target value
@@ -554,7 +578,8 @@ def find_bombing_opportunity(game_state, my_player, phase):
                     best_target = player
                     best_value = value
                     best_bomb_pos = bomb_pos
-                    
+    
+    logging.info(f"Best bomb target: {best_target.id if best_target else 'None'}, ")
     return best_bomb_pos, best_value
 
 def find_best_god_badge(game_state, my_player):
@@ -697,7 +722,7 @@ def should_collect_spoils(game_state):
         
     time_elapsed = time() - match_start_time
     logging.info(f"Time elapsed: {int(time_elapsed)}s, Collection ends at: {COLLECTION_PHASE_START}s")
-    return time_elapsed < COLLECTION_PHASE_START and len(game_state.map_info.spoils) > 0
+    return time_elapsed < COLLECTION_PHASE_START
 
 def should_wait_after_explosion(game_state, my_pos):
     """Check if we should wait after a bomb explosion."""
@@ -808,20 +833,7 @@ def next_move(game_state: GameStateResponse, my_player: PlayerResponse):
                 next_pos = path[1]
                 if next_pos not in danger_tiles:
                     return get_next_action(game_state, current_pos, next_pos, phase)
-            
-            # Combat opportunities only if safe
-            bomb_pos, target_value = find_bombing_opportunity(game_state, my_player, enemy_positions_history)
-            if bomb_pos and target_value > 100:
-                if current_pos == bomb_pos:
-                    # Make sure bombing won't trap us
-                    if find_escape_path(game_state, current_pos, get_bomb_danger_tiles(game_state), 
-                                      my_player.id, phase):
-                        return Drive.BOMB.value
-                else:
-                    path = find_path_to_position(game_state, current_pos, bomb_pos, my_player.id, phase)
-                    if path and len(path) > 1 and path[1] not in danger_tiles:
-                        return get_next_action(game_state, current_pos, path[1], phase)
-        else:
+                
             # Balk breaking phase logic...
             if is_adjacent_to_balk(game_state, current_pos):
                 # Make sure bombing won't trap us
@@ -830,10 +842,46 @@ def next_move(game_state: GameStateResponse, my_player: PlayerResponse):
                     return Drive.BOMB.value
             
             nearest_balk = find_nearest_balk_target(game_state, my_player)
+
             if nearest_balk:
                 path = find_path_to_position(game_state, current_pos, nearest_balk, my_player.id, phase)
                 if path and len(path) > 1 and path[1] not in danger_tiles:
                     return get_next_action(game_state, current_pos, path[1], phase)
+                
+            # Combat opportunities only if safe
+            bomb_pos, target_value = find_bombing_opportunity(game_state, my_player, enemy_positions_history)
+            
+            if bomb_pos and target_value > 100:
+                if current_pos == bomb_pos:
+                    # Make sure bombing won't trap us
+                    future_danger_tiles = get_bomb_danger_tiles(game_state, current_pos)  # Include our potential bomb
+                    logging.debug(f'future danger tiles: {future_danger_tiles}')
+                    escape_path = find_escape_path(game_state, current_pos, future_danger_tiles, my_player.id, phase)
+                    if escape_path:
+                        last_attack_time = time()
+                        return Drive.BOMB.value
+                else:
+                    path = find_path_to_position(game_state, current_pos, bomb_pos, my_player.id, phase)
+                    if path and len(path) > 1 and path[1] not in danger_tiles:
+                        return get_next_action(game_state, current_pos, path[1], phase)
+        else:
+            logging.info("Phase 2: Focusing on enemy")
+            # Combat opportunities only if safe
+            bomb_pos, target_value = find_bombing_opportunity(game_state, my_player, enemy_positions_history, is_focus_on_enemy = True)
+            
+            if bomb_pos and target_value > 100:
+                if current_pos == bomb_pos:
+                    # Make sure bombing won't trap us
+                    future_danger_tiles = get_bomb_danger_tiles(game_state, current_pos)  # Include our potential bomb
+                    logging.debug(f'future danger tiles: {future_danger_tiles}')
+                    escape_path = find_escape_path(game_state, current_pos, future_danger_tiles, my_player.id, phase)
+                    if escape_path:
+                        last_attack_time = time()
+                        return Drive.BOMB.value
+                else:
+                    path = find_path_to_position(game_state, current_pos, bomb_pos, my_player.id, phase)
+                    if path and len(path) > 1 and path[1] not in danger_tiles:
+                        return get_next_action(game_state, current_pos, path[1], phase)
     
     else:  # Phase 1
        # Find and move to nearest god badge
