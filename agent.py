@@ -30,11 +30,15 @@ last_action = None
 EXPLOSION_DELAY = 500  # ms to wait after explosion
 last_explosion_time = 0
 match_start_time = None
-COLLECTION_PHASE_START = 150  # seconds after match start
+COLLECTION_PHASE_START = 120  # seconds after match start
 
 # Global variable to track if we've faced the wall
 faced_wall = False
 standing_on_god = False
+
+# Add to global variables at the top
+move_counter = 0
+SPECIAL_WEAPON_CHECK_INTERVAL = 10  # Check every 10 moves
 
 def get_bomb_danger_tiles(game_state, additional_bomb_pos=None):
     """Get all tiles that are in danger from bombs."""
@@ -789,7 +793,18 @@ def find_nearest_target_phase2(game_state, my_player):
         
     return None
 
+def is_within_special_weapon_range(my_pos, target_pos):
+    """Check if position is within the 5x area of special weapon effect."""
+    row_diff = abs(my_pos[0] - target_pos[0])
+    col_diff = abs(my_pos[1] - target_pos[1])
+    return row_diff <= 2 and col_diff <= 2
+
 def next_move(game_state: GameStateResponse, my_player: PlayerResponse):
+    global last_attack_time, consecutive_stops, move_counter
+    
+    # Increment move counter
+    move_counter += 1
+    
     # Update our position history
     current_pos = my_player.current_position
     if not last_positions or current_pos != last_positions[-1]:
@@ -817,6 +832,48 @@ def next_move(game_state: GameStateResponse, my_player: PlayerResponse):
     
     # Only proceed with other actions if we're safe
     if phase == 2:
+        # Only check special weapon usage every SPECIAL_WEAPON_CHECK_INTERVAL moves
+        if move_counter >= SPECIAL_WEAPON_CHECK_INTERVAL and my_player.holy_spirit_stone:
+            # Reset counter when interval is reached
+            move_counter = 0
+            
+            # Find highest value target
+            best_target = None
+            best_value = 0
+            for player in game_state.map_info.players:
+                if player.id != my_player.id:
+                    # Only consider targets we're not too close to
+                    if not is_within_special_weapon_range(my_player.current_position, player.current_position):
+                        value = evaluate_target_value(player)
+                        if value > best_value:
+                            best_value = value
+                            best_target = player
+            
+            if best_target:
+                logging.info(f"Using special weapon on target {best_target.id} with value {best_value}")
+                return {
+                    'action': Action.USE_WEAPON.value,
+                    'payload': {
+                        'destination': {
+                            'col': best_target.current_position[1],
+                            'row': best_target.current_position[0]
+                        }
+                    }
+                }
+            else:
+                # If we have holy stone but are too close to targets, move away first
+                for player in game_state.map_info.players:
+                    if player.id != my_player.id and is_within_special_weapon_range(my_player.current_position, player.current_position):
+                        # Try to move away from this player
+                        for dr, dc in [(0, 2), (2, 0), (0, -2), (-2, 0)]:  # Try moving 2 steps away
+                            retreat_pos = (
+                                my_player.current_position[0] + dr,
+                                my_player.current_position[1] + dc
+                            )
+                            if (is_walkable(game_state, retreat_pos, my_player.id, phase) and 
+                                retreat_pos not in danger_tiles):
+                                return get_next_action(game_state, my_player.current_position, retreat_pos, phase)
+        
         # Check weapon in phase 2
         if my_player.cur_weapon == Weapon.WOODEN_PESTLE.value:
             logging.info("Phase 2: Currently using pestle - switching to bomb weapon")
