@@ -75,6 +75,11 @@ def is_walkable(game_state, position, my_id, danger_tiles=None, phase=1):
     if cell in [Tile.WALL.value, Tile.PRISON.value, Tile.BRICK_WALL.value, Tile.BALK.value]:
         return False
         
+    # Check for enemy positions
+    for player in game_state.map_info.players:
+        if player.id != my_id and player.current_position == position:
+            return False
+    
     # God badge is walkable in Phase 1
     if phase == 1 and cell == Tile.GOD_BADGE.value:
         return True
