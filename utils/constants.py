@@ -46,7 +46,7 @@ class SpoilType(Enum):
     STICKY_RICE = (32, 1)
     CHUNG_CAKE = (33, 2)
     NINE_TUSK_ELEPHANT = (34, 5)
-    NINE_SPURS_ROOSTER = (35, 3)
+    NINE_SPUR_ROOSTER = (35, 3)
     NINE_MANE_HAIR_HORSE = (36, 4)
     HOLY_SPIRIT_STONE = (37, 3)
 
@@ -72,5 +72,14 @@ class Phase(Enum):
 class Weapon(Enum):
     WOODEN_PESTLE = 1
     BOMB = 2
+
+class Tile(Enum):
+    EMPTY = 0
+    WALL = 1
+    BALK = 2
+    BRICK_WALL = 3
+    PRISON = 5
+    GOD_BADGE = 6
+    DESTROYED_TILE = 7
 
 SECOND = 1000
