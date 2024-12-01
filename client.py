@@ -57,23 +57,29 @@ async def on_ticktack_player(response):
         
         if not my_player:
             return
-            
-        # Get next move from agent
-        next_move = agent.next_move(game_state, my_player)
         
-        if next_move:
-            logging.debug(f'Next move: {next_move}')
-            if isinstance(next_move, dict):
-                # Handle action commands
-                await sio.emit(SocketEvent.ACTION.value, next_move)
-            else:
-                # Handle movement commands
-                await sio.emit(SocketEvent.DRIVE_PLAYER.value, {
-                    "direction": next_move
-                })
+        # Alternate between parent and child moves using a simple toggle
+        if not hasattr(on_ticktack_player, 'use_parent'):
+            on_ticktack_player.use_parent = True
+            
+        if on_ticktack_player.use_parent:
+            next_move = agent.next_move(game_state, my_player)
+        else:
+            next_move = agent.next_move(game_state, my_player, is_child=True)
+            
+        logging.debug(f'next_move: {next_move}')
+        # Toggle for next tick
+        on_ticktack_player.use_parent = not on_ticktack_player.use_parent
+            
+        # Send the move
+        if 'action' in next_move:
+            await sio.emit(SocketEvent.ACTION.value, next_move)
+        else:
+            await sio.emit(SocketEvent.DRIVE_PLAYER.value, next_move)
                 
     except Exception as e:
         logging.error(f"Error in ticktack handler: {str(e)}")
+
 
 async def join_game():
     # Connect to server
