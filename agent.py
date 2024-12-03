@@ -10,6 +10,34 @@ from utils.constants import Drive
 from utils.constants import Action
 import random
 from time import time
+from functools import lru_cache
+from heapq import heappush, heappop
+import cProfile
+import pstats
+from functools import lru_cache
+import numpy as np
+
+# Add timing decorator
+def timing_decorator(func):
+    def wrapper(*args, **kwargs):
+        start_time = time()
+        result = func(*args, **kwargs)
+        end_time = time()
+        logging.debug(f'{func.__name__} took {(end_time - start_time)*1000:.2f}ms')
+        return result
+    return wrapper
+
+# Add profiling decorator
+def profile_decorator(func):
+    def wrapper(*args, **kwargs):
+        profiler = cProfile.Profile()
+        profiler.enable()
+        result = func(*args, **kwargs)
+        profiler.disable()
+        stats = pstats.Stats(profiler).sort_stats('cumulative')
+        stats.print_stats(10)  # Show top 10 time-consuming functions
+        return result
+    return wrapper
 
 # Constants
 MOVE_TIME = 100  # ms per move
@@ -32,6 +60,7 @@ last_explosion_time = 0
 match_start_time = None
 COLLECTION_PHASE_START = 120  # seconds after match start
 MARRIAGE_PHASE_START = 150  # seconds after match start
+match_start_time = time()
 
 # Global variable to track if we've faced the wall
 faced_wall = False
@@ -98,6 +127,64 @@ def get_bomb_danger_tiles(game_state, additional_bomb_pos=None):
     
     return danger_tiles
 
+def get_special_weapon_danger_tiles(game_state):
+    """Get all tiles that are in danger from special weapons."""
+    danger_tiles = {}
+    for hammer in game_state.map_info.weapon_hammers:
+        danger_tiles[hammer.destination] = 2000
+        # add all tiles based on hammer's power as the radius
+        for direction in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+            for distance in range(1, hammer.power + 1):
+                row = hammer.destination[0] + direction[0] * distance
+                col = hammer.destination[1] + direction[1] * distance
+                pos = (row, col)
+                danger_tiles[pos] = 2000
+    for wind in game_state.map_info.weapon_winds:
+        danger_tiles[(wind.current_position)] = 2000
+        if wind.direction == Drive.LEFT.value:
+            danger_tiles[(wind.current_position[0], wind.current_position[1] - 1)] = 2000
+            danger_tiles[(wind.current_position[0], wind.current_position[1] + 1)] = 2000
+            danger_tiles[(wind.current_position[0] - 1, wind.current_position[1])] = 2000
+            danger_tiles[(wind.current_position[0] - 1, wind.current_position[1] - 1)] = 2000
+            danger_tiles[(wind.current_position[0] - 1, wind.current_position[1] + 1)] = 2000
+        elif wind.direction == Drive.RIGHT.value:
+            danger_tiles[(wind.current_position[0], wind.current_position[1] - 1)] = 2000
+            danger_tiles[(wind.current_position[0], wind.current_position[1] + 1)] = 2000
+            danger_tiles[(wind.current_position[0] + 1, wind.current_position[1])] = 2000
+            danger_tiles[(wind.current_position[0] + 1, wind.current_position[1] - 1)] = 2000
+            danger_tiles[(wind.current_position[0] + 1, wind.current_position[1] + 1)] = 2000
+        elif wind.direction == Drive.UP.value:
+            danger_tiles[(wind.current_position[0] - 1, wind.current_position[1])] = 2000
+            danger_tiles[(wind.current_position[0] + 1, wind.current_position[1])] = 2000
+            danger_tiles[(wind.current_position[0], wind.current_position[1] - 1)] = 2000
+            danger_tiles[(wind.current_position[0] + 1, wind.current_position[1] - 1)] = 2000
+            danger_tiles[(wind.current_position[0] - 1, wind.current_position[1] - 1)] = 2000
+        elif wind.direction == Drive.DOWN.value:
+            danger_tiles[(wind.current_position[0] - 1, wind.current_position[1])] = 2000
+            danger_tiles[(wind.current_position[0] + 1, wind.current_position[1])] = 2000
+            danger_tiles[(wind.current_position[0], wind.current_position[1] + 1)] = 2000
+            danger_tiles[(wind.current_position[0] + 1, wind.current_position[1] + 1)] = 2000
+            danger_tiles[(wind.current_position[0] - 1, wind.current_position[1] + 1)] = 2000
+
+    return danger_tiles
+
+def convert_map_to_numpy(game_state):
+    """Convert game map to numpy array for faster operations"""
+    return np.array(game_state.map_info.map_matrix)
+
+@timing_decorator
+def get_walkable_positions(game_state, phase):
+    """Get all walkable positions using numpy operations"""
+    map_array = convert_map_to_numpy(game_state)
+    
+    if phase == 1:
+        walkable_values = [Tile.EMPTY.value, Tile.GOD_BADGE.value]
+    else:
+        walkable_values = [Tile.EMPTY.value]
+        
+    walkable_mask = np.isin(map_array, walkable_values)
+    return np.argwhere(walkable_mask)
+
 def is_walkable(game_state, position, my_id, danger_tiles=None, phase=1):
     """Check if a position is walkable and safe."""
     row, col = position
@@ -141,34 +228,61 @@ def is_reachable(game_state, position, my_id, phase=1):
     # Phase 2: Can reach empty spaces and balks (to bomb)
     else:
         return cell in [Tile.EMPTY.value, Tile.BALK.value]
+    
+@lru_cache(maxsize=1024)
+def cached_find_path(game_state_hash, start_pos, end_pos, player_id, phase):
+    """Cached version of pathfinding"""
+    return find_path_to_position(game_state_hash, start_pos, end_pos, player_id, phase)
 
+def manhattan_distance(pos1, pos2):
+    return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
+
+@timing_decorator
 def find_path_to_position(game_state, start_pos, target_pos, my_id, phase=1):
-    """Find path to a specific position using BFS."""
-    if not target_pos:
+    """A* pathfinding with depth limit"""
+    if phase == 1:
+        max_depth = 1000
+    else:
+        max_depth = 20
+    
+    if not target_pos or manhattan_distance(start_pos, target_pos) > max_depth:
+        logging.warning(f"Target {target_pos} is out of reach or not provided")
         return None
         
-    queue = [(start_pos, [start_pos])]
-    visited = {start_pos}
+    queue = [(0, 0, start_pos, [start_pos])]
+    visited = {start_pos: 0}  # pos: g_score
     danger_tiles = get_bomb_danger_tiles(game_state)
+    special_weapon_danger_tiles = get_special_weapon_danger_tiles(game_state)
+    danger_tiles.update(special_weapon_danger_tiles)
     
     while queue:
-        current_pos, path = queue.pop(0)
+        f_score, g_score, current_pos, path = heappop(queue)
         
         if current_pos == target_pos:
             return path
             
+        if g_score > max_depth:
+            continue
+            
         # Try all cardinal directions
         for dr, dc in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
             next_pos = (current_pos[0] + dr, current_pos[1] + dc)
+            new_g_score = g_score + 1
             
-            if next_pos not in visited:
-                # Use is_reachable for target, is_walkable for path
-                if next_pos == target_pos:
-                    if is_reachable(game_state, next_pos, my_id, phase):
-                        return path + [next_pos]
-                elif (is_walkable(game_state, next_pos, my_id, danger_tiles, phase) or is_reachable(game_state, next_pos, my_id, phase)):
-                    queue.append((next_pos, path + [next_pos]))
-                    visited.add(next_pos)
+            # Skip if already visited with better score
+            if next_pos in visited and visited[next_pos] <= new_g_score:
+                continue
+                
+            # Check if position is valid
+            if next_pos == target_pos:
+                if is_reachable(game_state, next_pos, my_id, phase):
+                    return path + [next_pos]
+            elif is_walkable(game_state, next_pos, my_id, danger_tiles, phase) or is_reachable(game_state, next_pos, my_id, phase):
+                h_score = manhattan_distance(next_pos, target_pos)
+                f_score = new_g_score + h_score
+                
+                visited[next_pos] = new_g_score
+                heappush(queue, (f_score, new_g_score, next_pos, path + [next_pos]))
     
     return None
 
@@ -682,6 +796,8 @@ def find_emergency_move(game_state, my_player, phase):
     """Find any safe move when stuck."""
     current_pos = my_player.current_position
     danger_tiles = get_bomb_danger_tiles(game_state)
+    special_weapon_danger_tiles = get_special_weapon_danger_tiles(game_state)
+    danger_tiles.update(special_weapon_danger_tiles)
     
     # Try all directions in random order
     directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]
@@ -810,11 +926,13 @@ def find_nearest_target_phase2(game_state, my_player):
         
     return None
 
-def is_within_special_weapon_range(my_pos, target_pos):
+def is_within_special_weapon_range(my_pos, target_pos, child_pos):
     """Check if position is within the 5x area of special weapon effect."""
     row_diff = abs(my_pos[0] - target_pos[0])
     col_diff = abs(my_pos[1] - target_pos[1])
-    return row_diff <= 2 and col_diff <= 2
+    child_row_diff = abs(my_pos[0] - child_pos[0])
+    child_col_diff = abs(my_pos[1] - child_pos[1])
+    return row_diff <= 2 and col_diff <= 2 and child_row_diff <= 2 and child_col_diff <= 2
 
 def can_marry(game_state, my_player):
     '''Check if player has eternal badge and not have children for marriage'''
@@ -830,23 +948,45 @@ def next_move(game_state: GameStateResponse, my_player: PlayerResponse, is_child
     if current_time - last_marriage_time < MARRIAGE_COOLDOWN:
         return Drive.STOP.value
     
+    child_id = f"{my_player.id}_child"
+    my_child = next((player for player in game_state.map_info.players if player.id == child_id), None)
+        
     # Parent control logic
     if not is_child:
-        return handle_player_move(game_state, my_player, is_child=False)
+        return handle_player_move(game_state, my_player, is_child=False, child = my_child)
     
     # Child control logic (if exists)
     else:
          # Check if we have a child
-        child_id = f"{my_player.id}_child"
-        my_child = next((player for player in game_state.map_info.players if player.id == child_id), None)
         if my_child:
             return handle_player_move(game_state, my_child, is_child=True, parent = my_player)
         else:
             return handle_player_move(game_state, my_player, is_child=False)
+        
+def hash_game_state(game_state, area_of_interest=None):
+    """Create a hashable representation of relevant game state"""
+    # If area of interest provided, only hash that part of the map
+    if area_of_interest:
+        min_row, max_row, min_col, max_col = area_of_interest
+        map_slice = tuple(tuple(row[min_col:max_col+1]) 
+                         for row in game_state.map_info.map_matrix.matrix[min_row:max_row+1])
+    else:
+        map_slice = tuple(tuple(row) for row in game_state.map_info.map_matrix)
+    
+    # Hash only what's needed for pathfinding
+    return hash((
+        map_slice,
+        tuple(b.position for b in game_state.map_info.bombs),
+        tuple(p.current_position for p in game_state.map_info.players)
+    ))
 
-def handle_player_move(game_state, player, is_child=False, parent = None):
+def handle_player_move(game_state, player, is_child=False, parent = None, child = None):
     """Handle movement logic for either parent or child"""
     global last_attack_time, consecutive_stops, move_counter
+    if child:
+        child_pos = child.current_position
+    else:
+        child_pos = player.current_position
     current_pos = player.current_position
 
     if not is_child and (not last_positions or current_pos != last_positions[-1]):
@@ -857,9 +997,14 @@ def handle_player_move(game_state, player, is_child=False, parent = None):
         phase = 2
     else: 
         phase = 2 if player.has_transform else 1
+
+    game_state_hash = hash_game_state(game_state)
     
     # FIRST PRIORITY: Check for immediate danger
     danger_tiles = get_bomb_danger_tiles(game_state)
+    special_weapon_danger_tiles = get_special_weapon_danger_tiles(game_state)
+    danger_tiles.update(special_weapon_danger_tiles)
+    logging.debug(f'{danger_tiles}')
     if current_pos in danger_tiles:
         logging.info(f"{'Child' if is_child else 'Parent'} in danger! Looking for escape route...")
         escape_path = find_escape_path(game_state, current_pos, danger_tiles, player.id, phase)
@@ -893,7 +1038,7 @@ def handle_player_move(game_state, player, is_child=False, parent = None):
             best_value = 0
             for target_player in game_state.map_info.players:
                 if target_player.id.find(player.id) == -1:
-                    if not is_within_special_weapon_range(current_pos, target_player.current_position):
+                    if not is_within_special_weapon_range(current_pos, target_player.current_position, child_pos):
                         target_value = evaluate_target_value(target_player)
                         if target_value > best_value:
                             best_value = target_value
@@ -912,7 +1057,7 @@ def handle_player_move(game_state, player, is_child=False, parent = None):
             else:
                 # If we can use special weapon, but are too close to targets, move away first
                 for target_player in game_state.map_info.players:
-                    if target_player.id.find(player.id) == -1 and is_within_special_weapon_range(current_pos, target_player.current_position):
+                    if target_player.id.find(player.id) == -1 and is_within_special_weapon_range(current_pos, target_player.current_position, child_pos):
                         # Try to move away from target
                         for dr, dc in [(-2, 0), (2, 0), (0, -2), (0, 2)]:
                             retreat_pos = (

@@ -3,6 +3,7 @@ import sys
 import socketio
 import asyncio
 import logging
+from time import time
 
 import agent
 from utils.constants import SocketEvent
@@ -12,6 +13,10 @@ from models.game_state import GameStateResponse
 base_url = sys.argv[1]  # server url
 game_id = sys.argv[2]  # game id
 my_player_id = sys.argv[3]  # my player id
+
+
+start_time = time()
+end_time = time()
 
 # Set up logging
 logging.basicConfig(
@@ -51,7 +56,9 @@ async def on_join_game(response):
 # Handle ticktack player event
 @sio.on(SocketEvent.TICKTACK_PLAYER.value)
 async def on_ticktack_player(response):
+    global start_time
     try:
+        start_time = time()
         game_state = GameStateResponse(response)
         my_player = next((p for p in game_state.map_info.players if p.id == my_player_id), None)
         
@@ -79,6 +86,12 @@ async def on_ticktack_player(response):
                 
     except Exception as e:
         logging.error(f"Error in ticktack handler: {str(e)}")
+
+@sio.on(SocketEvent.DRIVE_PLAYER.value)
+async def on_drive_player(response):
+    global end_time
+    end_time = time()
+    logging.info(f'player id {my_player_id} Time taken: {end_time - start_time} seconds')
 
 
 async def join_game():
