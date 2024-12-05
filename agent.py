@@ -23,7 +23,7 @@ def timing_decorator(func):
         start_time = time()
         result = func(*args, **kwargs)
         end_time = time()
-        logging.debug(f'{func.__name__} took {(end_time - start_time)*1000:.2f}ms')
+        # logging.debug(f'{func.__name__} took {(end_time - start_time)*1000:.2f}ms')
         return result
     return wrapper
 
@@ -65,6 +65,7 @@ match_start_time = time()
 # Global variable to track if we've faced the wall
 faced_wall = False
 standing_on_god = False
+last_time_use_special_weapon = time()
 
 # Add to global variables at the top
 move_counter = 0
@@ -72,6 +73,7 @@ SPECIAL_WEAPON_CHECK_INTERVAL = 50  # Check every 10 moves
 last_marriage_time = 0
 MARRIAGE_COOLDOWN = 5  # 5 seconds cooldown
 my_spoil_count = {}
+my_player_id = ""
 
 def get_bomb_danger_tiles(game_state, additional_bomb_pos=None):
     """Get all tiles that are in danger from bombs."""
@@ -134,7 +136,7 @@ def get_special_weapon_danger_tiles(game_state):
         danger_tiles[hammer.destination] = 2000
         # add all tiles based on hammer's power as the radius
         for direction in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
-            for distance in range(1, hammer.power + 1):
+            for distance in range(1, hammer.power + 2):
                 row = hammer.destination[0] + direction[0] * distance
                 col = hammer.destination[1] + direction[1] * distance
                 pos = (row, col)
@@ -240,12 +242,8 @@ def manhattan_distance(pos1, pos2):
 @timing_decorator
 def find_path_to_position(game_state, start_pos, target_pos, my_id, phase=1):
     """A* pathfinding with depth limit"""
-    if phase == 1:
-        max_depth = 1000
-    else:
-        max_depth = 20
     
-    if not target_pos or manhattan_distance(start_pos, target_pos) > max_depth:
+    if not target_pos:
         logging.warning(f"Target {target_pos} is out of reach or not provided")
         return None
         
@@ -260,9 +258,6 @@ def find_path_to_position(game_state, start_pos, target_pos, my_id, phase=1):
         
         if current_pos == target_pos:
             return path
-            
-        if g_score > max_depth:
-            continue
             
         # Try all cardinal directions
         for dr, dc in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
@@ -664,8 +659,8 @@ def find_bombing_opportunity(game_state, my_player, phase, is_focus_on_enemy = F
     best_bomb_pos = None
     
     for player in game_state.map_info.players:
-        if player.id.find(my_player.id) != -1:
-            logging.debug(f"Skipping self {player.id}")
+        if player.id.find(my_player_id) != -1:
+            # logging.debug(f"Skipping self {player.id}")
             continue
             
         # Simple distance check first
@@ -678,7 +673,7 @@ def find_bombing_opportunity(game_state, my_player, phase, is_focus_on_enemy = F
             
         # Calculate target value
         value = evaluate_target_value(player)
-        logging.debug(f"value: {value}")
+        # logging.debug(f"value: {value}")
         if value <= 0:
             continue
             
@@ -930,18 +925,23 @@ def is_within_special_weapon_range(my_pos, target_pos, child_pos):
     """Check if position is within the 5x area of special weapon effect."""
     row_diff = abs(my_pos[0] - target_pos[0])
     col_diff = abs(my_pos[1] - target_pos[1])
-    child_row_diff = abs(my_pos[0] - child_pos[0])
-    child_col_diff = abs(my_pos[1] - child_pos[1])
-    return row_diff <= 2 and col_diff <= 2 and child_row_diff <= 2 and child_col_diff <= 2
+    child_row_diff = abs(child_pos[0] - target_pos[0])
+    child_col_diff = abs(child_pos[1] - target_pos[1])
+    return row_diff <= 3 and col_diff <= 3 and child_row_diff <= 3 and child_col_diff <= 3
 
 def can_marry(game_state, my_player):
     '''Check if player has eternal badge and not have children for marriage'''
+    if my_player.eternal_badge > 0 and my_player.lives < 3:
+        return True
     child_id = my_player.id + '_child'
     has_child = any(player.id == child_id for player in game_state.map_info.players)
     return my_player.eternal_badge > 0 and not has_child and time() - match_start_time > MARRIAGE_PHASE_START
 
 def next_move(game_state: GameStateResponse, my_player: PlayerResponse, is_child=False):
-    global last_marriage_time
+    global last_marriage_time, my_player_id
+    my_player_id = my_player.id
+
+
     current_time = time()
     
     # Check if we're in marriage cooldown period
@@ -971,7 +971,7 @@ def hash_game_state(game_state, area_of_interest=None):
         map_slice = tuple(tuple(row[min_col:max_col+1]) 
                          for row in game_state.map_info.map_matrix.matrix[min_row:max_row+1])
     else:
-        map_slice = tuple(tuple(row) for row in game_state.map_info.map_matrix)
+        map_slice = tuple(tuple(row) for row in game_state.map_info.map_matrix.matrix)
     
     # Hash only what's needed for pathfinding
     return hash((
@@ -981,8 +981,9 @@ def hash_game_state(game_state, area_of_interest=None):
     ))
 
 def handle_player_move(game_state, player, is_child=False, parent = None, child = None):
+    global my_player_id
     """Handle movement logic for either parent or child"""
-    global last_attack_time, consecutive_stops, move_counter
+    global last_attack_time, consecutive_stops, move_counter, last_time_use_special_weapon
     if child:
         child_pos = child.current_position
     else:
@@ -1004,7 +1005,6 @@ def handle_player_move(game_state, player, is_child=False, parent = None, child 
     danger_tiles = get_bomb_danger_tiles(game_state)
     special_weapon_danger_tiles = get_special_weapon_danger_tiles(game_state)
     danger_tiles.update(special_weapon_danger_tiles)
-    logging.debug(f'{danger_tiles}')
     if current_pos in danger_tiles:
         logging.info(f"{'Child' if is_child else 'Parent'} in danger! Looking for escape route...")
         escape_path = find_escape_path(game_state, current_pos, danger_tiles, player.id, phase)
@@ -1028,16 +1028,20 @@ def handle_player_move(game_state, player, is_child=False, parent = None, child 
     # SECOND PRIORITY: Find bomb opportunity
 
     if phase == 2:
-        # Only check special weapon opportunity for parent
         move_counter += 1
-        if not is_child and move_counter >= SPECIAL_WEAPON_CHECK_INTERVAL and player.time_to_use_special_weapons >= 0:
+        enemy = next((p for p in game_state.map_info.players if p.id.find(my_player_id) == -1), None)
+        logging.debug(f"HaiNM18 {enemy.has_transform}")
+        cooldown_time = time() - last_time_use_special_weapon
+        if player.time_to_use_special_weapons > 0 and player.holy_spirit_stone > 0 and not is_child and enemy.has_transform and cooldown_time > 10:
+            logging.debug("let bomb")
+            cooldown_time = time()
             move_counter = 0
 
             #Find highest value target
             best_target = None
             best_value = 0
             for target_player in game_state.map_info.players:
-                if target_player.id.find(player.id) == -1:
+                if target_player.id.find(my_player_id) == -1:
                     if not is_within_special_weapon_range(current_pos, target_player.current_position, child_pos):
                         target_value = evaluate_target_value(target_player)
                         if target_value > best_value:
@@ -1045,6 +1049,7 @@ def handle_player_move(game_state, player, is_child=False, parent = None, child 
                             best_target = target_player
             if best_target:
                 logging.info(f"Using special weapon on {best_target.id} with value {best_value}")
+                last_time_use_special_weapon = time()
                 return {
                     "action": Action.USE_WEAPON.value,
                     "payload": {
@@ -1057,18 +1062,20 @@ def handle_player_move(game_state, player, is_child=False, parent = None, child 
             else:
                 # If we can use special weapon, but are too close to targets, move away first
                 for target_player in game_state.map_info.players:
-                    if target_player.id.find(player.id) == -1 and is_within_special_weapon_range(current_pos, target_player.current_position, child_pos):
+                    if target_player.id.find(my_player_id) == -1 and is_within_special_weapon_range(current_pos, target_player.current_position, child_pos):
                         # Try to move away from target
-                        for dr, dc in [(-2, 0), (2, 0), (0, -2), (0, 2)]:
+                        for dr, dc in [(-3, 0), (3, 0), (0, -3), (0, 3)]:
                             retreat_pos = (
                                 player.current_position[0] + dr,
                                 player.current_position[1] + dc
                             )
-                            if is_walkable(game_state, retreat_pos, player.id, phase) and retreat_pos not in danger_tiles:
-                                return {
-                                    "direction": get_next_action(game_state, current_pos, retreat_pos, phase),
-                                    **({"characterType": "child"} if is_child else {}),
-                                }
+                            if is_reachable(game_state, retreat_pos, player.id, phase) and retreat_pos not in danger_tiles:
+                                path = find_path_to_position(game_state, current_pos, retreat_pos, player.id, phase)
+                                if path and len(path) > 1 and path[1] not in danger_tiles:
+                                    return {
+                                        "direction": get_next_action(game_state, current_pos, path[1], phase),
+                                        **({"characterType": "child"} if is_child else {})
+                                    }
         
         if player.cur_weapon == Weapon.WOODEN_PESTLE.value:
             logging.info("Phase 2: Currently using wooden pestle - switch to bomb")

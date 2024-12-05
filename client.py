@@ -57,10 +57,14 @@ async def on_join_game(response):
 @sio.on(SocketEvent.TICKTACK_PLAYER.value)
 async def on_ticktack_player(response):
     global start_time
+    global my_player_id
+    my_player_id = my_player_id[:13]
+    # logging.debug(f'my_player_id: {my_player_id}')
     try:
         start_time = time()
         game_state = GameStateResponse(response)
         my_player = next((p for p in game_state.map_info.players if p.id == my_player_id), None)
+
         
         if not my_player:
             return
@@ -74,7 +78,7 @@ async def on_ticktack_player(response):
         else:
             next_move = agent.next_move(game_state, my_player, is_child=True)
             
-        logging.debug(f'next_move: {next_move}')
+        # logging.debug(f'next_move: {next_move}')
         # Toggle for next tick
         on_ticktack_player.use_parent = not on_ticktack_player.use_parent
             
@@ -91,7 +95,6 @@ async def on_ticktack_player(response):
 async def on_drive_player(response):
     global end_time
     end_time = time()
-    logging.info(f'player id {my_player_id} Time taken: {end_time - start_time} seconds')
 
 
 async def join_game():
@@ -109,6 +112,8 @@ async def join_game():
         await asyncio.sleep(1)
 
 def run_client():
+    player_id = my_player_id[:13]
+    # logging.debug(f'player_id: {player_id}')
     asyncio.run(join_game())
 
 if __name__ == '__main__':
