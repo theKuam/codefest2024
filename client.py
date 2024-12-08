@@ -7,6 +7,7 @@ from time import time
 
 import agent
 from utils.constants import SocketEvent
+from utils.constants import GameTag
 from models.game_state import GameStateResponse
 
 # Arguments for game client
@@ -63,9 +64,12 @@ async def on_ticktack_player(response):
     try:
         start_time = time()
         game_state = GameStateResponse(response)
+        if game_state.tag != GameTag.UPDATE_DATA.value and game_state.player_id != my_player_id:
+            return
         my_player = next((p for p in game_state.map_info.players if p.id == my_player_id), None)
 
         
+        logging.debug(f"tag {game_state.tag}")
         if not my_player:
             return
         
@@ -77,6 +81,8 @@ async def on_ticktack_player(response):
             next_move = agent.next_move(game_state, my_player)
         else:
             next_move = agent.next_move(game_state, my_player, is_child=True)
+
+        logging.debug(f"next_move {next_move}")
             
         # logging.debug(f'next_move: {next_move}')
         # Toggle for next tick

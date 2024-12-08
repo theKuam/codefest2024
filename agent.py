@@ -50,7 +50,7 @@ ATTACK_COOLDOWN = 2.0  # Seconds between attack attempts
 last_positions = []  # Track our own last positions
 POSITION_HISTORY = 8  # How many of our positions to remember
 last_loop_break_time = 0
-LOOP_BREAK_DURATION = 2.0  # Duration of loop breaking behavior
+LOOP_BREAK_DURATION = 2.0  # Duration of loop breaking bƒehavior
 current_strategy = 'collect'   # 'collect' or 'attack'
 STRATEGY_DURATION = 5.0       # Minimum seconds before considering strategy change
 consecutive_stops = 0  # Track consecutive STOP actions
@@ -132,6 +132,7 @@ def get_bomb_danger_tiles(game_state, additional_bomb_pos=None):
 def get_special_weapon_danger_tiles(game_state):
     """Get all tiles that are in danger from special weapons."""
     danger_tiles = {}
+    remain_time_special = 1000
     for hammer in game_state.map_info.weapon_hammers:
         danger_tiles[hammer.destination] = 2000
         # add all tiles based on hammer's power as the radius
@@ -140,33 +141,33 @@ def get_special_weapon_danger_tiles(game_state):
                 row = hammer.destination[0] + direction[0] * distance
                 col = hammer.destination[1] + direction[1] * distance
                 pos = (row, col)
-                danger_tiles[pos] = 2000
+                danger_tiles[pos] = remain_time_special
     for wind in game_state.map_info.weapon_winds:
-        danger_tiles[(wind.current_position)] = 2000
+        danger_tiles[(wind.current_position)] = remain_time_special
         if wind.direction == Drive.LEFT.value:
-            danger_tiles[(wind.current_position[0], wind.current_position[1] - 1)] = 2000
-            danger_tiles[(wind.current_position[0], wind.current_position[1] + 1)] = 2000
-            danger_tiles[(wind.current_position[0] - 1, wind.current_position[1])] = 2000
-            danger_tiles[(wind.current_position[0] - 1, wind.current_position[1] - 1)] = 2000
-            danger_tiles[(wind.current_position[0] - 1, wind.current_position[1] + 1)] = 2000
+            danger_tiles[(wind.current_position[0], wind.current_position[1] - 1)] = remain_time_special
+            danger_tiles[(wind.current_position[0], wind.current_position[1] + 1)] = remain_time_special
+            danger_tiles[(wind.current_position[0] - 1, wind.current_position[1])] = remain_time_special
+            danger_tiles[(wind.current_position[0] - 1, wind.current_position[1] - 1)] = remain_time_special
+            danger_tiles[(wind.current_position[0] - 1, wind.current_position[1] + 1)] = remain_time_special
         elif wind.direction == Drive.RIGHT.value:
-            danger_tiles[(wind.current_position[0], wind.current_position[1] - 1)] = 2000
-            danger_tiles[(wind.current_position[0], wind.current_position[1] + 1)] = 2000
-            danger_tiles[(wind.current_position[0] + 1, wind.current_position[1])] = 2000
-            danger_tiles[(wind.current_position[0] + 1, wind.current_position[1] - 1)] = 2000
-            danger_tiles[(wind.current_position[0] + 1, wind.current_position[1] + 1)] = 2000
+            danger_tiles[(wind.current_position[0], wind.current_position[1] - 1)] = remain_time_special
+            danger_tiles[(wind.current_position[0], wind.current_position[1] + 1)] = remain_time_special
+            danger_tiles[(wind.current_position[0] + 1, wind.current_position[1])] = remain_time_special
+            danger_tiles[(wind.current_position[0] + 1, wind.current_position[1] - 1)] = remain_time_special
+            danger_tiles[(wind.current_position[0] + 1, wind.current_position[1] + 1)] = remain_time_special
         elif wind.direction == Drive.UP.value:
-            danger_tiles[(wind.current_position[0] - 1, wind.current_position[1])] = 2000
-            danger_tiles[(wind.current_position[0] + 1, wind.current_position[1])] = 2000
-            danger_tiles[(wind.current_position[0], wind.current_position[1] - 1)] = 2000
-            danger_tiles[(wind.current_position[0] + 1, wind.current_position[1] - 1)] = 2000
-            danger_tiles[(wind.current_position[0] - 1, wind.current_position[1] - 1)] = 2000
+            danger_tiles[(wind.current_position[0] - 1, wind.current_position[1])] = remain_time_special
+            danger_tiles[(wind.current_position[0] + 1, wind.current_position[1])] = remain_time_special
+            danger_tiles[(wind.current_position[0], wind.current_position[1] - 1)] = remain_time_special
+            danger_tiles[(wind.current_position[0] + 1, wind.current_position[1] - 1)] = remain_time_special
+            danger_tiles[(wind.current_position[0] - 1, wind.current_position[1] - 1)] = remain_time_special
         elif wind.direction == Drive.DOWN.value:
-            danger_tiles[(wind.current_position[0] - 1, wind.current_position[1])] = 2000
-            danger_tiles[(wind.current_position[0] + 1, wind.current_position[1])] = 2000
-            danger_tiles[(wind.current_position[0], wind.current_position[1] + 1)] = 2000
-            danger_tiles[(wind.current_position[0] + 1, wind.current_position[1] + 1)] = 2000
-            danger_tiles[(wind.current_position[0] - 1, wind.current_position[1] + 1)] = 2000
+            danger_tiles[(wind.current_position[0] - 1, wind.current_position[1])] = remain_time_special
+            danger_tiles[(wind.current_position[0] + 1, wind.current_position[1])] = remain_time_special
+            danger_tiles[(wind.current_position[0], wind.current_position[1] + 1)] = remain_time_special
+            danger_tiles[(wind.current_position[0] + 1, wind.current_position[1] + 1)] = remain_time_special
+            danger_tiles[(wind.current_position[0] - 1, wind.current_position[1] + 1)] = remain_time_special
 
     return danger_tiles
 
@@ -282,39 +283,37 @@ def find_path_to_position(game_state, start_pos, target_pos, my_id, phase=1):
     return None
 
 def find_escape_path(game_state, my_pos, danger_tiles, my_id, phase=1):
-    """Find a safe escape path using BFS, allowing movement through danger tiles."""
+    """Find an escape path, considering danger timing and walkable tiles."""
     queue = [(my_pos, [my_pos], float('inf'))]  # (pos, path, min_time_seen)
     visited = {my_pos: float('inf')}  # pos: min_time_seen
     
     while queue:
         current_pos, path, min_time = queue.pop(0)
         
-        # If current position is safe and has valid escape routes
+        # If current position is safe, return the path
         if current_pos not in danger_tiles:
-            if is_safe_escape_position(game_state, current_pos, my_id, danger_tiles, phase):
-                return path[1:]  # Return path excluding current position
+            return path[1:] if len(path) > 1 else None
         
         # Try all cardinal directions
         for dr, dc in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
             next_pos = (current_pos[0] + dr, current_pos[1] + dc)
             
-            # Check if position is within bounds and walkable
-            if not (0 <= next_pos[0] < game_state.map_info.map_matrix.rows and
-                   0 <= next_pos[1] < game_state.map_info.map_matrix.cols and
-                   is_walkable(game_state, next_pos, my_id, None, phase)):
+            # Skip if not walkable
+            if not is_walkable(game_state, next_pos, my_id, None, phase):
+                logging.debug(f"HaiNM18 not walk {next_pos} {not is_walkable(game_state, next_pos, my_id, None, phase)}")
                 continue
-                
-            # Calculate the minimum time we'll have when reaching this position
+            
+            # Calculate timing for next position
             next_min_time = min_time
             if next_pos in danger_tiles:
                 next_min_time = min(next_min_time, danger_tiles[next_pos])
             
-            # Calculate if we have enough time to reach this position
+            # Check if we have enough time to reach this position
             moves_needed = len(path) + 1
             time_needed = (moves_needed * MOVE_TIME) + SAFETY_MARGIN
             
-            # Skip if we don't have enough time to move through
             if next_min_time < time_needed:
+                logging.debug(f"HaiNM18 time {next_min_time < time_needed}")
                 continue
             
             # Only visit if we haven't seen this position or found a safer path
@@ -325,14 +324,15 @@ def find_escape_path(game_state, my_pos, danger_tiles, my_id, phase=1):
                 # Sort queue by minimum time (prioritize safer paths)
                 queue.sort(key=lambda x: x[2], reverse=True)
     
-    # If we're still in danger but can't find a completely safe path,
-    # try to move to the position with the longest time until explosion
+    # If no safe path found, try emergency escape
     if queue:
         best_emergency_path = max(queue, key=lambda x: x[2])
         remaining_time = best_emergency_path[2] - ((len(best_emergency_path[1]) * MOVE_TIME) + SAFETY_MARGIN)
-        logging.warning(f"No completely safe path found. Taking emergency path with {remaining_time}ms margin")
-        return best_emergency_path[1][1:]
+        if remaining_time > 0:  # Only use emergency path if we have some time margin
+            logging.warning(f"Taking emergency path with {remaining_time}ms margin")
+            return best_emergency_path[1][1:]
     
+    logging.warning("No escape path found!")
     return None
 
 def find_spoils(game_state):
@@ -462,7 +462,7 @@ def is_safe_escape_position(game_state, position, my_id, danger_tiles, phase=1):
     # Need at least 2 walkable adjacent tiles to avoid getting trapped
     return walkable_adjacent >= 2
 
-def get_next_action(game_state, current_pos, next_pos, phase):
+def get_next_action(game_state, current_pos, next_pos, phase, player_id=None):
     """Convert next position into an action."""
     global faced_wall, standing_on_god
     diff_row = next_pos[0] - current_pos[0]
@@ -477,6 +477,9 @@ def get_next_action(game_state, current_pos, next_pos, phase):
             
         next_tile = game_state.map_info.map_matrix[next_pos[0], next_pos[1]]
         
+        future_danger_tiles = get_bomb_danger_tiles(game_state, current_pos)
+        logging.debug(f"HaiNM18 {find_escape_path(game_state, current_pos, future_danger_tiles, player_id, phase=2)}")
+
         # Phase 1: Break brick walls on the way to god badge
         if phase == 1 and next_tile == Tile.BRICK_WALL.value:
             if faced_wall:
@@ -495,7 +498,9 @@ def get_next_action(game_state, current_pos, next_pos, phase):
                 
         # Phase 2: Bomb balks from any adjacent position
         elif phase == 2 and next_tile == Tile.BALK.value:
-            return Drive.BOMB.value
+            future_danger_tiles = get_bomb_danger_tiles(game_state, current_pos)
+            if find_escape_path(game_state, current_pos, future_danger_tiles, player_id, phase=2):
+                return Drive.BOMB.value
             
         # Normal movement
         standing_on_god = False  # Reset when moving
@@ -1006,7 +1011,7 @@ def handle_player_move(game_state, player, is_child=False, parent = None, child 
     special_weapon_danger_tiles = get_special_weapon_danger_tiles(game_state)
     danger_tiles.update(special_weapon_danger_tiles)
     if current_pos in danger_tiles:
-        logging.info(f"{'Child' if is_child else 'Parent'} in danger! Looking for escape route...")
+        logging.info(f"{'Child' if is_child else 'Parent'} in danger {player.current_position}! Looking for escape route...")
         escape_path = find_escape_path(game_state, current_pos, danger_tiles, player.id, phase)
         if escape_path:
             next_pos = escape_path[0]
@@ -1106,6 +1111,7 @@ def handle_player_move(game_state, player, is_child=False, parent = None, child 
                     }
             
             nearest_balk = find_nearest_balk_target(game_state, player)
+            logging.debug(f"haiNM18 {nearest_balk}")
             if nearest_balk:
                 path = find_path_to_position(game_state, current_pos, nearest_balk, player.id, phase)
                 if path and len(path) > 1 and path[1] not in danger_tiles:
@@ -1164,7 +1170,7 @@ def handle_player_move(game_state, player, is_child=False, parent = None, child 
                 path = find_path_to_position(game_state, current_pos, nearest_balk, player.id, phase)
                 if path and len(path) > 1 and path[1] not in danger_tiles:
                     return {
-                        "direction": get_next_action(game_state, current_pos, path[1], phase),
+                        "direction": get_next_action(game_state, current_pos, path[1], phase, player.id),
                         **({"characterType": "child"} if is_child else {})
                     }
             
